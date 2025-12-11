@@ -38,6 +38,7 @@ struct cli_args {
     char *serial_port;
     char *output_file;
     char parity;
+    bool raw_dump;
     int bits;
     uint32_t speed;
     int stop_bits;
@@ -54,6 +55,7 @@ struct option long_options[] = {
     { "stop-bits",   required_argument, NULL, 'S' },
     { "interval",    required_argument, NULL, 't' },
     { "low-latency", no_argument,       NULL, 'l' },
+    { "raw-dump",    no_argument,       NULL, 'r' },
     { "help",        no_argument,       NULL, 'h' },
     { NULL,          0,                 NULL,  0  },
 };
@@ -112,11 +114,11 @@ uint16_t crc16_table[] = {
     0x8201, 0x42C0, 0x4380, 0x8341, 0x4100, 0x81C1, 0x8081, 0x4040,
 };
 
-int crc_check(uint8_t *buffer, int length)
+bool crc_check(uint8_t *buffer, int length, const bool raw_dump)
 {
     uint8_t byte;
     uint16_t crc = 0xFFFF;
-    int valid_crc;
+    bool valid_crc;
 
    while (length-- > 2) {
       byte = *buffer++ ^ crc;
@@ -126,7 +128,9 @@ int crc_check(uint8_t *buffer, int length)
 
    valid_crc = ((crc >> 8) == (buffer[1] & 0xFF))  && ((crc & 0xFF) == (buffer[0] & 0xFF)) ;
 
-   fprintf(stderr, "CRC: %04X = %02X%02X [%s]\n", crc, buffer[1] & 0xFF, buffer[0] & 0xFF, valid_crc ? "OK" : "FAIL");
+   if(!raw_dump) {
+    fprintf(stderr, "CRC: %04X = %02X%02X [%s]\n", crc, buffer[1] & 0xFF, buffer[0] & 0xFF, valid_crc ? "OK" : "FAIL");
+   }
   
    return valid_crc;
 }
@@ -139,6 +143,7 @@ void usage(FILE *fp, char *progname, int exit_code)
     fprintf(fp, "%*c[-P parity] [-S stop_bits] [-b bits]\n\n", n, ' ');
     fprintf(fp, " -o, --output       output file to use (defaults to stdout, file will be truncated if already existing)\n");
     fprintf(fp, " -p, --serial-port  serial port to use\n");
+    fprintf(fp, " -r, --raw-dump     dump captured frames without global pcap information\n");
     fprintf(fp, " -s, --speed        serial port speed (default 9600)\n");
     fprintf(fp, " -b, --bits         number of bits (default 8)\n");
     fprintf(fp, " -P, --parity       parity to use (default 'N')\n");
@@ -163,16 +168,20 @@ void parse_args(int argc, char **argv, struct cli_args *args)
     args->bits = 8;
     args->speed = 9600;
     args->stop_bits = 1;
+    args->raw_dump = false;
     args->bytes_time_interval_us = 1500;
     args->low_latency = false;
 
-    while ((opt = getopt_long(argc, argv, "ho:p:s:P:S:b:lt:", long_options, NULL)) >= 0) {
+    while ((opt = getopt_long(argc, argv, "ho:p:rls:P:S:b:lt:", long_options, NULL)) >= 0) {
         switch (opt) {
         case 'o':
             args->output_file = optarg;
             break;
         case 'p':
             args->serial_port = optarg;
+            break;
+        case 'r':
+            args->raw_dump = true;
             break;
         case 's':
             args->speed = strtoul(optarg, NULL, 10);
@@ -199,11 +208,13 @@ void parse_args(int argc, char **argv, struct cli_args *args)
             usage(stderr, argv[0], EXIT_FAILURE);
         }
     }
-
-    fprintf(stderr, "output file: %s\n", args->output_file);
-    fprintf(stderr, "serial port: %s\n", args->serial_port);
-    fprintf(stderr, "port type: %d%c%d %d baud\n", args->bits, args->parity, args->stop_bits, args->speed);
-    fprintf(stderr, "time interval: %d\n", args->bytes_time_interval_us);
+    if(!args->raw_dump) {
+        fprintf(stderr, "output file: %s\n", args->output_file);
+        fprintf(stderr, "raw dump: %s\n", (args->raw_dump ? "yes" : "no"));
+        fprintf(stderr, "serial port: %s\n", args->serial_port);
+        fprintf(stderr, "port type: %d%c%d %d baud\n", args->bits, args->parity, args->stop_bits, args->speed);
+        fprintf(stderr, "time interval: %d\n", args->bytes_time_interval_us);
+    }
 }
 
 /* https://blog.mbedded.ninja/programming/operating-systems/linux/linux-serial-ports-using-c-cpp */
@@ -343,7 +354,7 @@ void write_packet_header(FILE *fp, int length)
     fflush(fp);
 }
 
-FILE *open_logfile(const char *path)
+FILE *open_logfile(const char *path, const bool raw_dump)
 {
     FILE *fp;
     if (!path || strcmp(path, "-") == 0) {
@@ -359,7 +370,9 @@ FILE *open_logfile(const char *path)
         }
     }
 
-    write_global_header(fp);
+    if (!raw_dump) {
+        write_global_header(fp);
+    }
 
     return fp;
 }
@@ -395,7 +408,9 @@ int main(int argc, char **argv)
 
     parse_args(argc, argv, &args);
 
-    fprintf(stderr, "starting modbus sniffer\n");
+    if(!args.raw_dump) {
+        fprintf(stderr, "starting modbus sniffer\n");
+    }
 
     if ((port = open(args.serial_port, O_RDONLY)) < 0)
         DIE("open port");
@@ -407,7 +422,7 @@ int main(int argc, char **argv)
             if (log_fp) {
                 fclose(log_fp);
             }
-            log_fp = open_logfile(args.output_file);
+            log_fp = open_logfile(args.output_file, args.raw_dump);
             rotate_log = 0;
         }
 
@@ -432,16 +447,19 @@ int main(int argc, char **argv)
 
         /* captured an entire packet */
         if (size > 0 && (res == 0 || size >= MODBUS_MAX_PACKET_SIZE || n_bytes == 0)) {
-            fprintf(stderr, "captured packet %d: length = %zu, ", ++n_packets, size);
-
-            if (crc_check(buffer, size)) {
-                dump_buffer(buffer, size);
+            if (!args.raw_dump) {
+                fprintf(stderr, "captured packet %d: length = %zu, ", ++n_packets, size);
             }
-            write_packet_header(log_fp, size);
 
-            if (fwrite(buffer, 1, size, log_fp) != size)
-                DIE("write pcap");
+            if (crc_check(buffer, size, args.raw_dump)) {
+                if (!args.raw_dump) {
+                    dump_buffer(buffer, size);
+                }
+                write_packet_header(log_fp, size);
 
+                if (fwrite(buffer, 1, size, log_fp) != size)
+                    DIE("write output file");
+            }
             fflush(log_fp);
             size = 0;
         }

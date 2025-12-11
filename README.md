@@ -19,6 +19,7 @@ Usage: ./sniffer [-h] [-o out_dir] [-p port] [-s speed]
 
  -o, --output       output file where to save the output
  -p, --serial-port  serial port to use
+ -r, --raw-dump     dump captured frames without global pcap information
  -s, --speed        serial port speed (default 9600)
  -b, --bits         number of bits (default 8)
  -P, --parity       parity to use (default 'N')
