@@ -334,7 +334,7 @@ void write_packet_header(FILE *fp, int length)
 
     header.ts_sec = t.tv_sec;
     header.ts_usec = t.tv_nsec / 1000;
-    header.incl_len = length;
+    header.incl_len = length + sizeof header;
     header.orig_len = length;
 
     if (fwrite(&header, sizeof header, 1, fp) != 1)
