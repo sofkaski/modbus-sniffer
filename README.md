@@ -25,7 +25,8 @@ Usage: ./sniffer [-h] [-o out_dir] [-p port] [-s speed]
  -P, --parity       parity to use (default 'N')
  -S, --stop-bits    stop bits to use (default 1)
  -t, --interval     time interval between packets (default 1500)
--i, --slave        filter by modbus slave id (0-255)
+ -i, --slave        filter by modbus slave id (0-255)
+ -f, --function     filter by modbus function code (0-255)
  -l, --low-latency  try to enable serial port low-latency mode (Linux-only)
 ```
 

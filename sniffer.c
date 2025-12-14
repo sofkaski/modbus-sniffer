@@ -45,6 +45,7 @@ struct cli_args {
     uint32_t bytes_time_interval_us;
     bool low_latency;
     int slave_id;
+    int function_code;
 };
 
 struct option long_options[] = {
@@ -58,6 +59,7 @@ struct option long_options[] = {
     { "low-latency", no_argument,       NULL, 'l' },
     { "raw-dump",    no_argument,       NULL, 'r' },
     { "slave",       required_argument, NULL, 'i' },
+    { "function",    required_argument, NULL, 'f' },
     { "help",        no_argument,       NULL, 'h' },
     { NULL,          0,                 NULL,  0  },
 };
@@ -152,6 +154,7 @@ void usage(FILE *fp, char *progname, int exit_code)
     fprintf(fp, " -S, --stop-bits    stop bits to use (default 1)\n");
     fprintf(fp, " -t, --interval     time interval between packets (default 1500)\n");
     fprintf(fp, " -i, --slave        filter by modbus slave id (0-255)\n");
+    fprintf(fp, " -f, --function     filter by modbus function code (0-255)\n");
 
 #ifdef HAS_LINUX_SERIAL_H
     fprintf(fp, " -l, --low-latency  try to enable serial port low-latency mode (Linux-only)\n");
@@ -175,8 +178,9 @@ void parse_args(int argc, char **argv, struct cli_args *args)
     args->bytes_time_interval_us = 1500;
     args->low_latency = false;
     args->slave_id = -1;
+    args->function_code = -1;
 
-    while ((opt = getopt_long(argc, argv, "ho:p:rls:P:S:b:lt:i:", long_options, NULL)) >= 0) {
+    while ((opt = getopt_long(argc, argv, "ho:p:rls:P:S:b:lt:i:f:", long_options, NULL)) >= 0) {
         switch (opt) {
         case 'o':
             args->output_file = optarg;
@@ -197,6 +201,15 @@ void parse_args(int argc, char **argv, struct cli_args *args)
                 usage(stderr, argv[0], EXIT_FAILURE);
             }
             args->slave_id = (int)v;
+            break;
+        }
+        case 'f': {
+            long v = strtol(optarg, NULL, 10);
+            if (v < 0 || v > 255) {
+                fprintf(stderr, "invalid function code: %s\n", optarg);
+                usage(stderr, argv[0], EXIT_FAILURE);
+            }
+            args->function_code = (int)v;
             break;
         }
         case 'b':
@@ -228,6 +241,7 @@ void parse_args(int argc, char **argv, struct cli_args *args)
         fprintf(stderr, "port type: %d%c%d %d baud\n", args->bits, args->parity, args->stop_bits, args->speed);
         fprintf(stderr, "time interval: %d\n", args->bytes_time_interval_us);
         fprintf(stderr, "Slave id filter %d\n", args->slave_id);
+        fprintf(stderr, "Function code filter %d\n", args->function_code);
     }
 }
 
@@ -401,7 +415,7 @@ void signal_handler(int signum)
 void dump_buffer(uint8_t *buffer, uint16_t length) 
 {
 	int i;
-	fprintf(stderr, "\tDUMP: ");
+	fprintf(stderr, "\tDUMP (slave: %02X, func: %02X): ", buffer[0], buffer[1]);
 	for (i=0; i < length; i++) {
 		fprintf(stderr, " %02X", (uint8_t)buffer[i]);
 	}
@@ -470,6 +484,17 @@ int main(int argc, char **argv)
                 if (size > 0 && buffer[0] != (uint8_t)args.slave_id) {
                     if (!args.raw_dump) {
                         fprintf(stderr, "skipping packet %d: slave id %02X does not match filter %02X\n", n_packets, buffer[0], args.slave_id);
+                    }
+                    size = 0;
+                    continue;
+                }
+            }
+
+            /* if a function filter is set, skip packets that don't match */
+            if (args.function_code >= 0) {
+                if (size > 1 && buffer[1] != (uint8_t)args.function_code) {
+                    if (!args.raw_dump) {
+                        fprintf(stderr, "skipping packet %d: function code %02X does not match filter %02X\n", n_packets, buffer[1], args.function_code);
                     }
                     size = 0;
                     continue;
