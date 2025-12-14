@@ -44,6 +44,7 @@ struct cli_args {
     int stop_bits;
     uint32_t bytes_time_interval_us;
     bool low_latency;
+    int slave_id;
 };
 
 struct option long_options[] = {
@@ -56,6 +57,7 @@ struct option long_options[] = {
     { "interval",    required_argument, NULL, 't' },
     { "low-latency", no_argument,       NULL, 'l' },
     { "raw-dump",    no_argument,       NULL, 'r' },
+    { "slave",       required_argument, NULL, 'i' },
     { "help",        no_argument,       NULL, 'h' },
     { NULL,          0,                 NULL,  0  },
 };
@@ -149,6 +151,7 @@ void usage(FILE *fp, char *progname, int exit_code)
     fprintf(fp, " -P, --parity       parity to use (default 'N')\n");
     fprintf(fp, " -S, --stop-bits    stop bits to use (default 1)\n");
     fprintf(fp, " -t, --interval     time interval between packets (default 1500)\n");
+    fprintf(fp, " -i, --slave        filter by modbus slave id (0-255)\n");
 
 #ifdef HAS_LINUX_SERIAL_H
     fprintf(fp, " -l, --low-latency  try to enable serial port low-latency mode (Linux-only)\n");
@@ -171,8 +174,9 @@ void parse_args(int argc, char **argv, struct cli_args *args)
     args->raw_dump = false;
     args->bytes_time_interval_us = 1500;
     args->low_latency = false;
+    args->slave_id = -1;
 
-    while ((opt = getopt_long(argc, argv, "ho:p:rls:P:S:b:lt:", long_options, NULL)) >= 0) {
+    while ((opt = getopt_long(argc, argv, "ho:p:rls:P:S:b:lt:i:", long_options, NULL)) >= 0) {
         switch (opt) {
         case 'o':
             args->output_file = optarg;
@@ -186,6 +190,15 @@ void parse_args(int argc, char **argv, struct cli_args *args)
         case 's':
             args->speed = strtoul(optarg, NULL, 10);
             break;
+        case 'i': {
+            long v = strtol(optarg, NULL, 10);
+            if (v < 0 || v > 255) {
+                fprintf(stderr, "invalid slave id: %s\n", optarg);
+                usage(stderr, argv[0], EXIT_FAILURE);
+            }
+            args->slave_id = (int)v;
+            break;
+        }
         case 'b':
             args->bits = atoi(optarg);
             break;
@@ -214,6 +227,7 @@ void parse_args(int argc, char **argv, struct cli_args *args)
         fprintf(stderr, "serial port: %s\n", args->serial_port);
         fprintf(stderr, "port type: %d%c%d %d baud\n", args->bits, args->parity, args->stop_bits, args->speed);
         fprintf(stderr, "time interval: %d\n", args->bytes_time_interval_us);
+        fprintf(stderr, "Slave id filter %d\n", args->slave_id);
     }
 }
 
@@ -449,6 +463,17 @@ int main(int argc, char **argv)
         if (size > 0 && (res == 0 || size >= MODBUS_MAX_PACKET_SIZE || n_bytes == 0)) {
             if (!args.raw_dump) {
                 fprintf(stderr, "captured packet %d: length = %zu, ", ++n_packets, size);
+            }
+
+            /* if a slave filter is set, skip packets that don't match */
+            if (args.slave_id >= 0) {
+                if (size > 0 && buffer[0] != (uint8_t)args.slave_id) {
+                    if (!args.raw_dump) {
+                        fprintf(stderr, "skipping packet %d: slave id %02X does not match filter %02X\n", n_packets, buffer[0], args.slave_id);
+                    }
+                    size = 0;
+                    continue;
+                }
             }
 
             if (crc_check(buffer, size, args.raw_dump)) {
