@@ -2,8 +2,8 @@
 
 A sniffer for the Modbus RTU protocol.
 
-This programs allows you to snif packets from a Modbus RTU serial
-comunication and save them in a .pcap file that you can open with
+This programs allows you to sniff packets from a Modbus RTU serial
+communication and save them in a .pcap file that you can open with
 a program like Wireshark.
 
 ## Usage
@@ -13,7 +13,7 @@ and a POSIX operating system.
 
 You can specify the options with the command line:
 
-```
+```text
 Usage: ./sniffer [-h] [-o out_dir] [-p port] [-s speed]
                  [-P parity] [-S stop_bits] [-b bits]
 
@@ -31,15 +31,16 @@ Usage: ./sniffer [-h] [-o out_dir] [-p port] [-s speed]
 ```
 
 By default the output file is `stdout`. This allows to pipe directly the output into other
-programs, such as Wireshark. 
+programs, such as Wireshark.
 
-Unlinke previous versions of the program, an output directory and files into them
-are not created. If you need to do a long capture, splitting it into multiple caputure
+Unlike previous versions of the program, an output directory and files into them
+are not created. If you need to do a long capture, splitting it into multiple capture
 files, you can use an external program, such as `logrotate` to create a copy of the output
-file, and the send to this program `SIGUSR1` to reopen the capture file again. 
+file, and the send to this program `SIGUSR1` to reopen the capture file again.
 
 As an example, you can use the following logrotate config:
-```
+
+```text
 /path/to/capture.log {
     size 10K
     copy
@@ -60,7 +61,6 @@ by disabling the Bluetooth interface.
 ## USB Serial port latency
 
 Linux kernel tries to optimize load of USB transfers, that's a latency_timer which is default 16ms.
-It's pretty high for modbus communication, so to get better result use the `-l` (`--low-latency`) flag to try to set 
+It's pretty high for modbus communication, so to get better result use the `-l` (`--low-latency`) flag to try to set
 the serial port automatically to ASYNC_LOW_LATENCY (1ms). This requires root privileges, and it's supported only on Linux.
 Moreover, not all serial adapters may be supported. In case it's not supported the program will print an error and continue in normal mode.
- 

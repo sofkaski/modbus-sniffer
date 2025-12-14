@@ -454,7 +454,7 @@ int main(int argc, char **argv)
             rotate_log = 0;
         }
 
-        /* RTFM! these are overwritten after each select call and thus must be inizialized again */
+        /* RTFM! these are overwritten after each select call and thus must be initialized again */
         FD_ZERO(&set);
         FD_SET(port, &set);
 
