@@ -39,6 +39,7 @@ struct cli_args {
     char *output_file;
     char parity;
     bool raw_dump;
+    bool silent;
     int bits;
     uint32_t speed;
     int stop_bits;
@@ -58,6 +59,7 @@ struct option long_options[] = {
     { "interval",    required_argument, NULL, 't' },
     { "low-latency", no_argument,       NULL, 'l' },
     { "raw-dump",    no_argument,       NULL, 'r' },
+    { "silent",      no_argument,       NULL, 'q' },
     { "slave",       required_argument, NULL, 'i' },
     { "function",    required_argument, NULL, 'f' },
     { "help",        no_argument,       NULL, 'h' },
@@ -118,7 +120,7 @@ uint16_t crc16_table[] = {
     0x8201, 0x42C0, 0x4380, 0x8341, 0x4100, 0x81C1, 0x8081, 0x4040,
 };
 
-bool crc_check(uint8_t *buffer, int length, const bool raw_dump)
+bool crc_check(uint8_t *buffer, int length, const bool silent)
 {
     uint8_t byte;
     uint16_t crc = 0xFFFF;
@@ -132,7 +134,7 @@ bool crc_check(uint8_t *buffer, int length, const bool raw_dump)
 
    valid_crc = ((crc >> 8) == (buffer[1] & 0xFF))  && ((crc & 0xFF) == (buffer[0] & 0xFF)) ;
 
-   if(!raw_dump) {
+   if(!silent) {
     fprintf(stderr, "CRC: %04X = %02X%02X [%s]\n", crc, buffer[1] & 0xFF, buffer[0] & 0xFF, valid_crc ? "OK" : "FAIL");
    }
   
@@ -148,6 +150,7 @@ void usage(FILE *fp, char *progname, int exit_code)
     fprintf(fp, " -o, --output       output file to use (defaults to stdout, file will be truncated if already existing)\n");
     fprintf(fp, " -p, --serial-port  serial port to use\n");
     fprintf(fp, " -r, --raw-dump     dump captured frames without global pcap information\n");
+    fprintf(fp, " -q, --silent       suppress dumping of captured frames to stderr\n");
     fprintf(fp, " -s, --speed        serial port speed (default 9600)\n");
     fprintf(fp, " -b, --bits         number of bits (default 8)\n");
     fprintf(fp, " -P, --parity       parity to use (default 'N')\n");
@@ -175,12 +178,13 @@ void parse_args(int argc, char **argv, struct cli_args *args)
     args->speed = 9600;
     args->stop_bits = 1;
     args->raw_dump = false;
+    args->silent = false;
     args->bytes_time_interval_us = 1500;
     args->low_latency = false;
     args->slave_id = -1;
     args->function_code = -1;
 
-    while ((opt = getopt_long(argc, argv, "ho:p:rls:P:S:b:lt:i:f:", long_options, NULL)) >= 0) {
+    while ((opt = getopt_long(argc, argv, "ho:p:rls:P:S:b:lt:i:f:q", long_options, NULL)) >= 0) {
         switch (opt) {
         case 'o':
             args->output_file = optarg;
@@ -190,6 +194,9 @@ void parse_args(int argc, char **argv, struct cli_args *args)
             break;
         case 'r':
             args->raw_dump = true;
+            break;
+        case 'q':
+            args->silent = true;
             break;
         case 's':
             args->speed = strtoul(optarg, NULL, 10);
@@ -475,14 +482,14 @@ int main(int argc, char **argv)
 
         /* captured an entire packet */
         if (size > 0 && (res == 0 || size >= MODBUS_MAX_PACKET_SIZE || n_bytes == 0)) {
-            if (!args.raw_dump) {
-                fprintf(stderr, "captured packet %d: length = %zu, ", ++n_packets, size);
+            if (!args.raw_dump  && !args.silent) {
+                 fprintf(stderr, "captured packet %d: length = %zu, ", ++n_packets, size);
             }
 
             /* if a slave filter is set, skip packets that don't match */
             if (args.slave_id >= 0) {
                 if (size > 0 && buffer[0] != (uint8_t)args.slave_id) {
-                    if (!args.raw_dump) {
+                    if (!args.raw_dump && !args.silent) {
                         fprintf(stderr, "skipping packet %d: slave id %02X does not match filter %02X\n", n_packets, buffer[0], args.slave_id);
                     }
                     size = 0;
@@ -493,7 +500,7 @@ int main(int argc, char **argv)
             /* if a function filter is set, skip packets that don't match */
             if (args.function_code >= 0) {
                 if (size > 1 && buffer[1] != (uint8_t)args.function_code) {
-                    if (!args.raw_dump) {
+                    if (!args.raw_dump && !args.silent) {
                         fprintf(stderr, "skipping packet %d: function code %02X does not match filter %02X\n", n_packets, buffer[1], args.function_code);
                     }
                     size = 0;
@@ -501,9 +508,12 @@ int main(int argc, char **argv)
                 }
             }
 
-            if (crc_check(buffer, size, args.raw_dump)) {
+            if (crc_check(buffer, size, args.raw_dump || args.silent)) {
                 if (!args.raw_dump) {
-                    dump_buffer(buffer, size);
+
+                    if (!args.silent) {
+                        dump_buffer(buffer, size);
+                    }
                 }
                 write_packet_header(log_fp, size);
 
