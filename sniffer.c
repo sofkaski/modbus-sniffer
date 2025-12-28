@@ -508,15 +508,12 @@ int main(int argc, char **argv)
                 }
             }
 
+
+            if (!args.raw_dump && !args.silent) {
+                dump_buffer(buffer, size);
+            }
             if (crc_check(buffer, size, args.raw_dump || args.silent)) {
-                if (!args.raw_dump) {
-
-                    if (!args.silent) {
-                        dump_buffer(buffer, size);
-                    }
-                }
                 write_packet_header(log_fp, size);
-
                 if (fwrite(buffer, 1, size, log_fp) != size)
                     DIE("write output file");
             }
