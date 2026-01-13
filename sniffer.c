@@ -120,11 +120,32 @@ uint16_t crc16_table[] = {
     0x8201, 0x42C0, 0x4380, 0x8341, 0x4100, 0x81C1, 0x8081, 0x4040,
 };
 
-bool crc_check(uint8_t *buffer, int length, const bool silent)
+char *function_code_name[] = {
+    "", /* 0 (0x00) Reserved */
+    "Read Coils", /* 1 (0x01) Read Coils */
+    "Read Discrete Inputs", /* 2 (0x02) Read Discrete Inputs */
+    "Read Holding Registers", /* 3 (0x03) Read Holding Registers */
+    "Read Input Registers", /* 4 (0x04) Read Input Registers */
+    "Write Single Coil", /* 5 (0x05) Write Single Coil */
+    "Write Single Register", /* 6 (0x06) Write Single Register */
+    "Read Exception Status", /* 7 (0x07) Read Exception Status (Serial Line only) */
+    "Diagnostics", /* 8 (0x08) Diagnostics (Serial Line only) */
+    "", "", /* 9 - 10 */
+    "Get Comm Event Counter", /* 11 (0x0B) Get Comm Event Counter (Serial Line only) */
+    "","","", /* 12 - 14 */
+    "Write Multiple Coils", /* 15 (0x0F) Write Multiple Coils */
+    "Write Multiple Registers", /* 16 (0x10) Write Multiple Registers */
+    "Report Server ID (Serial Line only)", /* 17 (0x11) Report Server ID (Serial Line only) */
+    "", "", "", "",/* 18 - 21 */
+    "Mask Write Register", /* 22 (0x16) Mask Write Register */
+    "Read/Write Multiple Registers", /* 23 (0x17) Read/Write Multiple Registers */
+};
+
+
+bool crc_check(uint8_t *buffer, int length)
 {
     uint8_t byte;
     uint16_t crc = 0xFFFF;
-    bool valid_crc;
 
    while (length-- > 2) {
       byte = *buffer++ ^ crc;
@@ -132,14 +153,9 @@ bool crc_check(uint8_t *buffer, int length, const bool silent)
       crc ^= crc16_table[byte];
    }
 
-   valid_crc = ((crc >> 8) == (buffer[1] & 0xFF))  && ((crc & 0xFF) == (buffer[0] & 0xFF)) ;
-
-   if(!silent) {
-    fprintf(stderr, "CRC: %04X = %02X%02X [%s]\n", crc, buffer[1] & 0xFF, buffer[0] & 0xFF, valid_crc ? "OK" : "FAIL");
-   }
-  
-   return valid_crc;
+   return ((crc >> 8) == (buffer[1] & 0xFF)) && ((crc & 0xFF) == (buffer[0] & 0xFF));
 }
+
 
 void usage(FILE *fp, char *progname, int exit_code)
 {
@@ -419,14 +435,61 @@ void signal_handler(int signum)
     rotate_log = 1;
 }
 
-void dump_buffer(uint8_t *buffer, uint16_t length) 
+uint16_t get_uint16(uint8_t *buffer, int offset) {
+    return (uint16_t)((buffer[offset] << 8) | buffer[offset + 1]);
+}
+
+void dump_buffer(uint8_t *buffer, uint16_t length, bool crc_ok) 
 {
 	int i;
-	fprintf(stderr, "\tDUMP (slave: %02X, func: %02X): ", buffer[0], buffer[1]);
+    int function_code = length > 1 ? buffer[1] : 0;
+    int starting_register = length > 2 ? get_uint16(buffer, 2) : 0;
+    int number_of_registers = length > 4 ? get_uint16(buffer, 4) : 0;
+
+
+	fprintf(stderr, "\tDUMP (CRC: %s)", crc_ok ? "OK" : "FAIL");
 	for (i=0; i < length; i++) {
 		fprintf(stderr, " %02X", (uint8_t)buffer[i]);
 	}
-	fprintf(stderr, "\n");
+    fprintf(stderr, "\n");
+    if (!crc_ok) {
+        return;
+    }
+    fprintf(stderr, "\tSlave ID: %d\n", buffer[0]);
+    fprintf(stderr, "\tFunction: %d, %s\n", function_code, (long unsigned int) function_code < sizeof(function_code_name) ? function_code_name[function_code] : "Unknown");
+    fprintf(stderr, "\tStarting Address: %d\n", starting_register);
+    fprintf(stderr, "\tNumber of registers/coils: %d\n", number_of_registers);
+    if (length > 7) {
+        switch (function_code) {
+            case 16: /* Write Multiple Registers */ {
+                int reg;
+                int index = 7;
+                fprintf(stderr, "\tRegister data: ");
+    	        for (reg=starting_register; reg < starting_register + number_of_registers; reg++) {
+		            fprintf(stderr, "[%d: %d], ", reg, get_uint16(buffer, index));
+                    index += 2;
+	            }
+                fprintf(stderr, "\n");
+                break;
+            }
+            case 15: /* Write Multiple Coils */ {
+                int coil;
+                int index = 7;
+                fprintf(stderr, "\tCoil data: ");
+    	        for (coil=starting_register; coil < starting_register + number_of_registers; coil++) {
+                    int byte_index = (coil - starting_register) / 8;
+                    int bit_index = (coil - starting_register) % 8;
+                    fprintf(stderr, "[%d: %d], ", coil, (buffer[index + byte_index] >> bit_index) & 0x01);
+                }
+                fprintf(stderr, "\n");
+                break;
+            }
+            default: {
+                /* no additional data */
+                break;
+            }
+        }
+    }
 }
 
 int main(int argc, char **argv)
@@ -438,6 +501,7 @@ int main(int argc, char **argv)
     struct timeval timeout;
     fd_set set;
     FILE *log_fp = NULL;
+    bool crc_ok = false;
 
     signal(SIGUSR1, signal_handler);
 
@@ -483,14 +547,14 @@ int main(int argc, char **argv)
         /* captured an entire packet */
         if (size > 0 && (res == 0 || size >= MODBUS_MAX_PACKET_SIZE || n_bytes == 0)) {
             if (!args.raw_dump  && !args.silent) {
-                 fprintf(stderr, "captured packet %d: length = %zu, ", ++n_packets, size);
+                 fprintf(stderr, "Packet #%d: length = %zu, ", ++n_packets, size);
             }
 
             /* if a slave filter is set, skip packets that don't match */
             if (args.slave_id >= 0) {
                 if (size > 0 && buffer[0] != (uint8_t)args.slave_id) {
                     if (!args.raw_dump && !args.silent) {
-                        fprintf(stderr, "skipping packet %d: slave id %02X does not match filter %02X\n", n_packets, buffer[0], args.slave_id);
+                        fprintf(stderr, "Skipping packet #%d: slave id %02X does not match filter %02X\n", n_packets, buffer[0], args.slave_id);
                     }
                     size = 0;
                     continue;
@@ -501,18 +565,18 @@ int main(int argc, char **argv)
             if (args.function_code >= 0) {
                 if (size > 1 && buffer[1] != (uint8_t)args.function_code) {
                     if (!args.raw_dump && !args.silent) {
-                        fprintf(stderr, "skipping packet %d: function code %02X does not match filter %02X\n", n_packets, buffer[1], args.function_code);
+                        fprintf(stderr, "Skipping packet #%d: function code %02X does not match filter %02X\n", n_packets, buffer[1], args.function_code);
                     }
                     size = 0;
                     continue;
                 }
             }
 
-
+            crc_ok = crc_check(buffer, size);
             if (!args.raw_dump && !args.silent) {
-                dump_buffer(buffer, size);
+                dump_buffer(buffer, size, crc_ok);
             }
-            if (crc_check(buffer, size, args.raw_dump || args.silent)) {
+            if (crc_ok) {
                 write_packet_header(log_fp, size);
                 if (fwrite(buffer, 1, size, log_fp) != size)
                     DIE("write output file");
